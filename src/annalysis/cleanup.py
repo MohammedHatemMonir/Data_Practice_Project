@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-
+import logging
 import re
 from pathlib import Path
 
@@ -100,3 +100,40 @@ def load_state_territory_ghg() -> pd.DataFrame:
     df["ghg_kt_co2e"] = pd.to_numeric(df["ghg_kt_co2e"], errors="coerce")
     df = df.dropna(subset=["ghg_kt_co2e"])
     return df
+
+
+def load_nga_factors() -> pd.DataFrame:
+    """
+    Real: NGA Factors 2025 workbook, 'Table 9' (transport fuels by
+    equipment type) -- multi-row header, 'Transport type' forward-filled
+    down merged cells. Only 'Cars and light commercial vehicles' x
+    Gasoline/Diesel oil are extracted -- the two fuels petroleum_statistics
+    actually reports at state level. Factor = energy content (GJ/kL) x
+    combined Scope 1 factor (kg CO2-e/GJ) / 1000 -- the two-step real
+    calculation, not a single looked-up number.
+    (Table 8, stationary energy factors, exists in the same workbook but
+    isn't used -- not relevant to a transport emissions model.)
+    Fixture fallback: flat fuel_type,factor_kg_co2e_per_l CSV.
+    """
+    path = _locate("nga_factors_2025")
+    is_real = path.suffix.lower() in (".xlsx", ".xls") and "Table 9" in pd.ExcelFile(path).sheet_names
+
+    if is_real:
+        raw = pd.read_excel(path, sheet_name="Table 9", header=None, skiprows=3)
+        raw.columns = ["transport_type", "fuel_type", "energy_content", "sc1_co2",
+                       "sc1_ch4", "sc1_n2o", "sc1_combined", "sc3"]
+        raw["transport_type"] = raw["transport_type"].ffill()
+        target = raw[
+            (raw["transport_type"] == "Cars and light commercial vehicles")
+            & (raw["fuel_type"].isin(["Gasoline", "Diesel oil"]))
+        ].copy()
+        target["energy_content"] = pd.to_numeric(target["energy_content"], errors="coerce")
+        target["sc1_combined"] = pd.to_numeric(target["sc1_combined"], errors="coerce")
+        target["factor_kg_co2e_per_l"] = target["energy_content"] * target["sc1_combined"] / 1000
+        df = target[["fuel_type", "factor_kg_co2e_per_l"]]
+    else:
+        df = _read_tabular(path)
+
+    df["factor_kg_co2e_per_l"] = pd.to_numeric(df["factor_kg_co2e_per_l"], errors="coerce")
+    return df.dropna(subset=["factor_kg_co2e_per_l"])
+
