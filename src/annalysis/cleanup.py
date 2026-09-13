@@ -137,3 +137,36 @@ def load_nga_factors() -> pd.DataFrame:
     df["factor_kg_co2e_per_l"] = pd.to_numeric(df["factor_kg_co2e_per_l"], errors="coerce")
     return df.dropna(subset=["factor_kg_co2e_per_l"])
 
+
+def load_bitre_yearbook() -> pd.DataFrame:
+    """
+    Real: BITRE Yearbook 'Table 4.3' -- total VKT by state/territory,
+    wide format (states as columns, financial years as rows), in BILLION
+    vehicle-km (converted to million here to match this project's unit).
+    Fixture fallback: flat state,year,mode,vkt_million_km CSV.
+    """
+    path = _locate("bitre_yearbook")
+    is_real = path.suffix.lower() in (".xlsx", ".xls") and "Table 4.3" in pd.ExcelFile(path).sheet_names
+
+    if is_real:
+        raw = pd.read_excel(path, sheet_name="Table 4.3", header=None)
+        state_cols = raw.iloc[3]
+        col_map = {c: state_cols[c] for c in raw.columns if state_cols[c] in VALID_STATES}
+        records = []
+        for col, state in col_map.items():
+            block = raw.iloc[5:, [0, col]].copy()
+            block.columns = ["fy", "vkt_billion_km"]
+            block["state"] = state
+            records.append(block)
+        df = pd.concat(records, ignore_index=True)
+        df = df.dropna(subset=["fy", "vkt_billion_km"])
+        df["year"] = df["fy"].astype(str).str.split("-").str[0].astype(int)
+        df["vkt_million_km"] = pd.to_numeric(df["vkt_billion_km"], errors="coerce") * 1000
+        df = df[["state", "year", "vkt_million_km"]]
+    else:
+        df = _read_tabular(path)
+
+    df = _standardise_state(df)
+    df["vkt_million_km"] = pd.to_numeric(df["vkt_million_km"], errors="coerce")
+    df = df.dropna(subset=["vkt_million_km"])
+    return df
