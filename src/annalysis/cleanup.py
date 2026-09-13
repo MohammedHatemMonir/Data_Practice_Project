@@ -240,3 +240,52 @@ def load_vehicle_registrations() -> pd.DataFrame:
     df = df.dropna(subset=["count"])
     return df
 
+
+
+
+def load_population() -> pd.DataFrame:
+    """
+    Real: ABS wide-format quarterly ERP export ('Data1' sheet) -- one
+    column per state x sex combination, dates down the rows. Only the
+    'Persons' (both-sex total) columns are kept.
+    Fixture fallback: flat state,year,quarter,population CSV.
+    """
+    path = _locate("abs_population")
+    is_real = path.suffix.lower() in (".xlsx", ".xls") and "Data1" in pd.ExcelFile(path).sheet_names
+
+    if is_real:
+        raw = pd.read_excel(path, sheet_name="Data1", header=None)
+        header_row = raw.iloc[0]
+        state_names = {
+            "New South Wales": "NSW", "Victoria": "VIC", "Queensland": "QLD",
+            "South Australia": "SA", "Western Australia": "WA",
+            "Tasmania": "TAS", "Northern Territory": "NT",
+            "Australian Capital Territory": "ACT",
+        }
+        records = []
+        for col in raw.columns[1:]:
+            label = str(header_row[col])
+            if "Persons" not in label:
+                continue
+            state = next((code for name, code in state_names.items() if name in label), None)
+            if state is None:
+                continue  # the "Australia" national total column
+            block = raw.iloc[10:, [0, col]].copy()
+            block.columns = ["date", "population"]
+            block["state"] = state
+            records.append(block)
+        df = pd.concat(records, ignore_index=True)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df = df.dropna(subset=["date"])
+        df["year"] = df["date"].dt.year
+        df["quarter"] = df["date"].dt.quarter
+        df["fy_year"] = df["date"].apply(_fy_start_from_date)
+        df = df[["state", "year", "quarter", "fy_year", "population"]]
+    else:
+        df = _read_tabular(path)
+        df["fy_year"] = df["year"]  # fixture has no real dates; treat as already FY-aligned
+
+    df = _standardise_state(df)
+    df["population"] = pd.to_numeric(df["population"], errors="coerce")
+    df = df.dropna(subset=["population"])
+    return df
